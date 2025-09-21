@@ -59,15 +59,9 @@ class CityMeanRegressor(RegressorMixin):
         y : array-like, shape = (n_samples,)
             Target values.
         """
-        if y is None:
-            raise ValueError("y must be provided for fitting")
-
         y_arr = np.asarray(y)
         if y_arr.size == 0:
             raise ValueError("y must not be empty")
-
-        if X is None:
-            raise ValueError("X with 'city' must be provided for CityMeanRegressor")
 
         # Extract city column from X. Support pandas DataFrame/Series and numpy/py lists.
         cities = None
@@ -130,27 +124,19 @@ class CityMeanRegressor(RegressorMixin):
         X : array-like or pandas DataFrame
             Must contain a 'city' column or be a 1-D array-like of city labels.
         """
-        if not hasattr(self, 'city_means_') or not hasattr(self, 'global_mean_'):
-            raise ValueError("This CityMeanRegressor instance is not fitted yet. Call 'fit' before using this estimator.")
-
         if X is None:
             # Return scalar as array of size 1 using global mean if no X is given
             return np.array([self.global_mean_], dtype=float)
 
         # Extract city labels from X
-        if hasattr(X, 'ndim') and getattr(X, 'ndim') == 1 and not hasattr(X, 'columns'):
-            cities = np.asarray(X)
-        elif hasattr(X, 'columns') and 'city' in getattr(X, 'columns'):
+        if hasattr(X, 'columns') and 'city' in getattr(X, 'columns'):
             cities = np.asarray(X['city'])
         else:
             X_arr = np.asarray(X)
             if X_arr.ndim == 1:
                 cities = X_arr
             else:
-                if isinstance(X, np.ndarray) and X.dtype.names and 'city' in X.dtype.names:
-                    cities = np.asarray(X['city'])
-                else:
-                    raise ValueError("X must be a 1-D array/Series of city labels or a DataFrame with a 'city' column")
+                cities = np.asarray(X['city'])
 
         # Map each city to its mean with fallback
         preds = np.empty(len(cities), dtype=float)
