@@ -1,13 +1,3 @@
-What would be a code of such classifier for such a task? Use some classes from `sklearn.base` as a parent classes.
-
-
-```
-Теперь обучите классификатор, который для заведения предсказывает медиану среднего чека по всем объектам тестовой выборки с таким же, как у него, значением modified_features, а если такого в обучающей выборке нет, то глобальную медиану среднего чека по всей обучающей выборке.
-
-```
-
-================================================
-
 I have created a train and test datasets:
 
 ```
@@ -15,40 +5,37 @@ filtered = data[data["average_bill"].notna() & (data["average_bill"] <= 2500)]
 
 clean_data_train, clean_data_test = train_test_split(
     filtered, stratify=filtered['average_bill'], test_size=0.33, random_state=42)
-
-clean_data_train["modified_features"] = (
-    clean_data_train["rubrics_id"].astype(str)
-    + " q " +
-    clean_data_train["features_id"].astype(str)
-)
-
-# множество допустимых комбинаций
-train_combos = set(clean_data_train["modified_features"].unique())
-
-# test: склеиваем
-clean_data_test["modified_features"] = (
-    clean_data_test["rubrics_id"].astype(str)
-    + " q " +
-    clean_data_test["features_id"].astype(str)
-)
-
-# заменяем всё, чего нет в train
-clean_data_test.loc[
-    ~clean_data_test["modified_features"].isin(train_combos),
-    "modified_features"
-] = "other"
 ```
 
-Now I want to run classifier on train, set apply to test set like following:
+Where `data.head()` command gives next output:
 
 ```
-clf = ModifiedFeaturesMedianClassifier()
-clf.fit(clean_data_train, clean_data_train["average_bill"])
+	org_id	city	average_bill	rating	rubrics_id	features_id
+0	15903868628669802651	msk	1500.0	4.270968	30776 30774	3501685156 3501779478 20422 3502045016 3502045...
+1	16076540698036998306	msk	500.0	4.375000	30771	1509 1082283206 273469383 10462 11617 35017794...
+2	8129364761615040323	msk	500.0	4.000000	31495	10462 11177 11617 11629 1416 1018 11704 11867 ...
+3	15262729117594253452	msk	500.0	4.538813	30776 30770	3501618484 2020795524 11629 11617 1018 11704 2...
+4	13418544315327784420	msk	500.0	4.409091	31495	11617 10462 11177 1416 11867 3501744275 20282 ...
 
-# 2. Predict on test
-preds = clf.predict(clean_data_test)
 ```
 
-Now I want to generate a simple *.csv file: first column is the index of test item in initial data object (it can be uniqly identified by `org_id` column), second is the value of preds.
+Now I want to use a CatBoostClassifier on a bloated version of these datasets, named `sparse_data_train` and `sparse_data_test` as follows:
 
-How to do it?
+```
+clf = CatBoostClassifier()
+clf.fit(sparse_data_train, clean_data_train['average_bill'])
+test_preds = clf.predict(sparse_data_test)
+bal_acc_test = balanced_accuracy_score(sparse_data_test["average_bill"], test_preds)
+```
+
+How to get these datasets `sparse_data_train` and `sparse_data_test` with Python code according to the next rule?
+
+```
+Вам нужно будет превратить обучающие и тестовые данные в разреженные матрицы sparse_data_train и sparse_data_test соответственно, таким образом, что:
+
+столбец city превратится в столбец из единиц и нулей (например, 1 - msk, 0 - spb);
+столбец rating перекочует в разреженные матрицы без изменений;
+каждый тип из rubrics_id и каждый тип из features_id превратятся в отдельный 0-1 признак;
+
+В тестовой выборке будут фичи, которых в обучающей выборке не было. Надо создать дополнительную фантомную фичу feature_other, в которой будет то, сколько неизвестных по обучающей выборке фичей есть у данного объекта.
+```
