@@ -1,0 +1,21 @@
+Использовал ИИ для генерации начального кода графиков и кода поиска самых коррелирующих фичей через Copilot.
+
+==========================================
+
+Give me a code to plot a dependency of `cnt` column against remaining columns.
+Do the code concise, scatter plots should be very simple: only points and axes.
+Unite resulting plots into a grid.
+
+=======
+
+I want to use three different colors for points, based on value of 'holiday' and
+'workingday' column. When both are zeros it should be one color, when one of them
+is one it should be another. There are no rows, where both values are ones.
+
+=======
+
+Extract common logic of plot drawing into a function and call this function for a and for s2
+
+=======
+
+`df` contains a number of features, which can have a big mutual covariance. Given that `cnt` is a target feature, give me a code to list pairs with highest mutual covariance: sort them by decreasing absolute value of covariance and list top 5.
