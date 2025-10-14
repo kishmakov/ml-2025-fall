@@ -1,0 +1,9 @@
+Here is the code to organize bins for feature vectors `X` (one dimensional, lies between -4 and 4) and target value `y` in the set ${0, 1}$.
+
+```
+bin_width = 0.2
+bins = np.arange(-4, 4 + bin_width, bin_width)
+bin_indices = np.digitize(X.ravel(), bins)
+```
+
+How conveniently to count average number of $y$ for each bin using DataFrame?
