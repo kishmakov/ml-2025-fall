@@ -54,7 +54,9 @@ def create_split(feature_values: np.ndarray, threshold: float) -> tp.Tuple[np.nd
     :param threshold: value to compare with
     :return: two sets of indices
     """
-    raise NotImplementedError("COMPLETE THIS FUNCTION")
+    mask = feature_values <= threshold
+    left_idx = np.where(mask)[0]
+    right_idx = np.where(~mask)[0]
     return left_idx, right_idx
 
 
@@ -75,8 +77,10 @@ def _best_split(self, X: np.ndarray, y: np.ndarray):
         thresholds = np.unique(current_feature_values)
         for threshold in thresholds:
             # find indices for split with current threshold
-            current_weighted_impurity, current_left_impurity, current_right_impurity = ...  # calcualte impurity for given indices
-            raise NotImplementedError("COMPLETE THIS FUNCTION")
+            left_idx, right_idx = create_split(current_feature_values, threshold)
+            left_ys = y[left_idx]
+            right_ys = y[right_idx]
+            current_weighted_impurity, current_left_impurity, current_right_impurity = weighted_impurity(left_ys, right_ys)
             if current_weighted_impurity < lowest_impurity:
                 lowest_impurity = current_weighted_impurity
                 best_feature_id = feature
