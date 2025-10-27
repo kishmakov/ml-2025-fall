@@ -393,8 +393,15 @@ class ExperimentHandler:
         :param run: run to log to
         :return: None
         """
-        raise NotImplementedError("COMPLETE THIS FUNCTION")
-        cross_val_results = ...  # compute crossval scores (easier done using corresponding sklearn method)
+        cross_val_results = sklearn.model_selection.cross_validate(
+            estimator,
+            X=self.X_train,
+            y=self.y_train,
+            scoring=metrics,
+            cv=self._cv_iterable,
+            n_jobs=self._n_jobs,
+            return_train_score=False
+        )
         for key, value in cross_val_results.items():
             if key.startswith('test_'):
                 metric_name = key.split('_', maxsplit=1)[1]
@@ -410,26 +417,33 @@ class ExperimentHandler:
     def generate_stacking_predictions(self, estimator, run):
         """
         generates predictions over cross-validation folds, then saves them as artifacts
-        returns fitted estimator for convinience and les train overhead
+        returns fitted estimator for convenience and les train overhead
         :param estimator: estimator to use
         :param run: run to log to
         :return: estimator fitted on train, stacking cross-val predictions, stacking test predictions
         """
-        raise NotImplementedError("COMPLETE THIS FUNCTION")
         if hasattr(estimator, "predict_proba"):  # choose the most informative method for stacking predictions
             method = "predict_proba"
         elif hasattr(estimator, "decision_function"):
             method = "decision_function"
         else:
             method = "predict"
-        cross_val_stacking_prediction = ...  # generate crossval predictions for stacking using most informative method
+        cross_val_stacking_prediction = sklearn.model_selection.cross_val_predict(
+            estimator,
+            X=self.X_train,
+            y=self.y_train,
+            cv=self._cv_iterable,
+            n_jobs=self._n_jobs,
+            method=method
+        )
         run.log_artifact(ExperimentHandler.stacking_prediction_filename,
-                         lambda file: np.save(file, cross_val_stacking_prediction))
+                            lambda file: np.save(file, cross_val_stacking_prediction))
         estimator.fit(self.X_train, self.y_train)
         test_stacking_prediction = getattr(estimator, method)(self.X_test)
         run.log_artifact(ExperimentHandler.test_stacking_prediction_filename,
-                         lambda file: np.save(file, test_stacking_prediction))
+                            lambda file: np.save(file, test_stacking_prediction))
         return estimator, cross_val_stacking_prediction, test_stacking_prediction
+
 
     def get_metrics(self, estimator):
         """
