@@ -54,12 +54,15 @@ class MyAdaBoostClassifier:
             seed: int
     ):
         """
-        create new base estiamtor with proper keywords
+        create new base estimator with proper keywords
         and new *unique* seed
         :param seed:
         :return:
         """
-        ...
+        params = dict(self.base_estimator_kwargs)
+        if self.seed_keyword is not None:
+            params[self.seed_keyword] = int(seed)
+        estimator = self.base_estimator(**params)
         return estimator
 
     def get_new_weights(
@@ -70,12 +73,23 @@ class MyAdaBoostClassifier:
     ):
         """
         Calculate new weights according to SAMME.R scheme
-        :param true_labels: [n_classes]
+        :param true_labels: [n_samples]
         :param predictions: [n_samples, n_classes]
         :param weights:     [n_samples]
         :return: normalized weights for next estimator fitting
         """
-        ...
+        K = self.n_classes
+        proba = np.clip(predictions, self.eps, 1.0)
+        # Y coding: +1 for true class, -1/(K-1) otherwise
+        Y = np.full_like(proba, fill_value=-1.0 / (K - 1))
+        Y[np.arange(true_labels.shape[0]), true_labels] = 1.0
+        factor = (K - 1.0) / K
+        new_weights = weights * np.exp(-factor * (Y * np.log(proba)).sum(axis=1))
+        s = new_weights.sum()
+        if s <= 0:
+            new_weights = np.full_like(new_weights, 1.0 / new_weights.size)
+        else:
+            new_weights /= s
         return new_weights
 
     @staticmethod
@@ -93,8 +107,9 @@ class MyAdaBoostClassifier:
         :param weights: [n_samples]
         :return:
         """
-        ...
-        return error
+        y_pred = estimator.predict(X)
+        err = np.average(y_pred != y, weights=weights)
+        return err
 
     def fit(
             self,
@@ -109,9 +124,58 @@ class MyAdaBoostClassifier:
         """
         self.error_history = []
         # compute number of classes for internal use
-        self.n_classes = ...
+        classes = np.unique(y)
+        self.classes_ = classes
+        self.n_classes = classes.size
         # init weights uniformly over all samples
-        weights = ...
+        n = X.shape[0]
+        weights = np.full(n, 1.0 / n)
+        # helper to get proba aligned to self.classes_
+        def _predict_proba_aligned(est, X_):
+            if hasattr(est, "predict_proba"):
+                p = est.predict_proba(X_)
+                # align to self.classes_
+                p_aligned = np.full((X_.shape[0], self.n_classes), self.eps)
+                if hasattr(est, "classes_"):
+                    idx_map = {c: i for i, c in enumerate(est.classes_)}
+                    for j, c in enumerate(self.classes_):
+                        if c in idx_map:
+                            p_aligned[:, j] = p[:, idx_map[c]]
+                else:
+                    p_aligned = p
+                return np.clip(p_aligned, self.eps, 1.0)
+            elif hasattr(est, "decision_function"):
+                df = est.decision_function(X_)
+                if df.ndim == 1:
+                    # binary -> convert to two-class probs via sigmoid
+                    p1 = 1.0 / (1.0 + np.exp(-df))
+                    p = np.column_stack([1 - p1, p1])
+                else:
+                    # multiclass margins -> softmax
+                    z = df - df.max(axis=1, keepdims=True)
+                    ez = np.exp(z)
+                    p = ez / ez.sum(axis=1, keepdims=True)
+                # align if possible
+                p_aligned = np.full((X_.shape[0], self.n_classes), self.eps)
+                if hasattr(est, "classes_"):
+                    idx_map = {c: i for i, c in enumerate(est.classes_)}
+                    for j, c in enumerate(self.classes_):
+                        if c in idx_map:
+                            p_aligned[:, j] = p[:, idx_map[c]]
+                else:
+                    p_aligned = p
+                return np.clip(p_aligned, self.eps, 1.0)
+            else:
+                # fallback: one-hot of predictions
+                yhat = est.predict(X_)
+                p = np.full((X_.shape[0], self.n_classes), self.eps)
+                for j, c in enumerate(self.classes_):
+                    p[:, j] = (yhat == c).astype(float)
+                # smooth
+                p = (p + self.eps)
+                p /= p.sum(axis=1, keepdims=True)
+                return p
+
         # sequentially fit each model and adjust weights
         for seed in self.rng.choice(
                 max(MyAdaBoostClassifier.big_number, self.n_estimators),
@@ -119,15 +183,19 @@ class MyAdaBoostClassifier:
                 replace=False
         ):
             # add newly created estimator
-            self.estimators.append(self.create_new_estimator(seed))
+            est = self.create_new_estimator(seed)
+            self.estimators.append(est)
             # fit added estimator to data with current sample weights
-            ...
+            try:
+                est.fit(X, y, sample_weight=weights)
+            except TypeError:
+                est.fit(X, y)
             # compute probability predictions
-            ...
+            proba = _predict_proba_aligned(est, X)
             # calculate weighted error of last estimator and append to error history
-            self.error_history.append(self.get_estimator_error(...))
+            self.error_history.append(self.get_estimator_error(est, X, y, weights))
             # compute new adjusted weights
-            weights = ...
+            weights = self.get_new_weights(y, proba, weights)
 
         return self
 
@@ -140,9 +208,47 @@ class MyAdaBoostClassifier:
         :param X: [n_samples, n_features]
         :return: array of probabilities of a shape [n_samples, n_classes]
         """
-        # calculate probabilities from each estimator and average them, clip logarithms using self.eps
-        ...
-        # use softmax to ensure probabilities sum to 1, use numerically stable implementation
+        if not self.estimators:
+            return np.full((X.shape[0], self.n_classes), 1.0 / self.n_classes)
+        def _predict_proba_aligned(est, X_):
+            if hasattr(est, "predict_proba"):
+                p = est.predict_proba(X_)
+            elif hasattr(est, "decision_function"):
+                df = est.decision_function(X_)
+                if df.ndim == 1:
+                    p1 = 1.0 / (1.0 + np.exp(-df))
+                    p = np.column_stack([1 - p1, p1])
+                else:
+                    z = df - df.max(axis=1, keepdims=True)
+                    ez = np.exp(z)
+                    p = ez / ez.sum(axis=1, keepdims=True)
+            else:
+                yhat = est.predict(X_)
+                p = np.full((X_.shape[0], self.n_classes), self.eps)
+                for j, c in enumerate(self.classes_):
+                    p[:, j] = (yhat == c).astype(float)
+                p = (p + self.eps)
+                p /= p.sum(axis=1, keepdims=True)
+            p_aligned = np.full((X_.shape[0], self.n_classes), self.eps)
+            if hasattr(est, "classes_"):
+                idx_map = {c: i for i, c in enumerate(est.classes_)}
+                for j, c in enumerate(self.classes_):
+                    if c in idx_map:
+                        p_aligned[:, j] = p[:, idx_map[c]]
+            else:
+                p_aligned = p
+            return np.clip(p_aligned, self.eps, 1.0)
+
+        K = self.n_classes
+        scores = np.zeros((X.shape[0], K))
+        factor = (K - 1.0) / K
+        for est in self.estimators:
+            p = _predict_proba_aligned(est, X)
+            scores += factor * np.log(np.clip(p, self.eps, 1.0))
+        # softmax
+        scores -= scores.max(axis=1, keepdims=True)
+        exp_s = np.exp(scores)
+        probas = exp_s / exp_s.sum(axis=1, keepdims=True)
         return probas
 
     def predict(
@@ -154,7 +260,9 @@ class MyAdaBoostClassifier:
         :param X: [n_samples, n_features]
         :return: array class predictions of a shape [n_samples]
         """
-        ...
+        probas = self.predict_proba(X)
+        idx = np.argmax(probas, axis=1)
+        predictions = self.classes_[idx]
         return predictions
 
 
