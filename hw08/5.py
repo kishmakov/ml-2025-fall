@@ -59,17 +59,17 @@ class MyBinaryTreeGradientBoostingClassifier:
         {0,1}: L_i = log(1 + exp(z_i)) - y_i * z_i
         {-1,1}: L_i = log(1 + exp(-y_i * z_i))
         """
+        y = np.asarray(true_labels, dtype=float).ravel()
         z = np.asarray(logits, dtype=float).ravel()
-        y = np.asarray(true_labels).ravel()
-        uniq = np.unique(y)
-        if np.array_equal(uniq, np.array([-1, 1])) or np.array_equal(uniq, np.array([-1.0, 1.0])):
-            # y in {-1,1}
-            loss_vec = np.logaddexp(0.0, -y * z)
-        else:
-            # convert anything else to {0,1}
-            if uniq.min() < 0:
-                y = (y + 1.0) / 2.0
-            loss_vec = np.logaddexp(0.0, z) - y * z
+        p = np.empty_like(z)
+        pos = z >= 0
+        neg = ~pos
+        p[pos] = 1.0 / (1.0 + np.exp(-z[pos]))
+        ez = np.exp(z[neg])
+        p[neg] = ez / (1.0 + ez)
+        eps = MyBinaryTreeGradientBoostingClassifier.eps
+        p = np.clip(p, eps, 1.0 - eps)
+        loss_vec = -(y * np.log(p) + (1.0 - y) * np.log(1.0 - p))
         return float(loss_vec.mean())
 
     @staticmethod
@@ -82,20 +82,15 @@ class MyBinaryTreeGradientBoostingClassifier:
         {0,1}: grad_i = sigmoid(z_i) - y_i
         {-1,1}: grad_i = -y_i * sigmoid(-y_i * z_i)
         """
+        y = np.asarray(true_labels, dtype=float).ravel()
         z = np.asarray(logits, dtype=float).ravel()
-        y = np.asarray(true_labels).ravel()
-        uniq = np.unique(y)
-        if np.array_equal(uniq, np.array([-1, 1])) or np.array_equal(uniq, np.array([-1.0, 1.0])):
-            # y in {-1,1}
-            yz = -y * z
-            prob = MyBinaryTreeGradientBoostingClassifier._stable_sigmoid(yz)
-            grad = -y * prob
-        else:
-            if uniq.min() < 0:
-                y = (y + 1.0) / 2.0
-            prob = MyBinaryTreeGradientBoostingClassifier._stable_sigmoid(z)
-            grad = prob - y
-        return grad
+        p = np.empty_like(z)
+        pos = z >= 0
+        neg = ~pos
+        p[pos] = 1.0 / (1.0 + np.exp(-z[pos]))
+        ez = np.exp(z[neg])
+        p[neg] = ez / (1.0 + ez)
+        return p - y
 
     def fit(
             self,
