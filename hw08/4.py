@@ -57,78 +57,33 @@ class MyBinaryTreeGradientBoostingClassifier:
     def cross_entropy_loss(
             true_labels: np.ndarray,
             logits: np.ndarray
-    ):
+    ) -> float:
         """
-        compute negative log-likelihood for logits,
-        use clipping for logarithms with self.eps
-        or use numerically stable special functions.
-        This is used to track model learning process
-        :param true_labels: [n_samples]
-        :param logits: [n_samples]
-        :return:
+        Binary cross-entropy (negative log-likelihood) given logits.
+        loss_i = log(1 + exp(z_i)) - y_i * z_i
+        Uses logaddexp for numerical stability.
+        Returns mean loss.
         """
-        y = np.asarray(true_labels).reshape(-1)
-        z = np.asarray(logits).reshape(-1)
-        # detect label encoding
-        uniq = np.unique(y)
-        if np.array_equal(uniq, np.array([0, 1])) or np.array_equal(uniq, np.array([0.0, 1.0])) or (
-                uniq.size == 1 and (uniq[0] == 0 or uniq[0] == 1)
-        ):
-            # loss = softplus(z) - y*z
-            loss_vec = np.logaddexp(0.0, z) - y * z
-        elif np.array_equal(uniq, np.array([-1, 1])) or (
-                uniq.size == 1 and (uniq[0] == -1 or uniq[0] == 1)
-        ):
-            # loss = softplus(-y*z)
-            loss_vec = np.logaddexp(0.0, -y * z)
-        else:
-            # fallback: treat as {0,1}
-            loss_vec = np.logaddexp(0.0, z) - y * z
-        return float(np.mean(loss_vec))
+        y = MyBinaryTreeGradientBoostingClassifier._normalize_labels(true_labels)
+        z = np.asarray(logits, dtype=float).ravel()
+        # logaddexp(0, z) = log(1 + exp(z)) stable
+        loss_vec = np.logaddexp(0.0, z) - y * z
+        return float(loss_vec.mean())
 
     @staticmethod
     def cross_entropy_loss_gradient(
             true_labels: np.ndarray,
             logits: np.ndarray
-    ):
+    ) -> np.ndarray:
         """
-        compute gradient of log-likelihood w.r.t logits,
-        use clipping for logarithms with self.eps
-        or use numerically stable special functions
-        :param true_labels: [n_samples]
-        :param logits: [n_samples]
-        :return: [n_samples] gradient
+        Gradient of mean negative log-likelihood w.r.t logits.
+        grad_i = sigmoid(z_i) - y_i
         """
-        y = np.asarray(true_labels).reshape(-1)
-        z = np.asarray(logits).reshape(-1)
+        y = MyBinaryTreeGradientBoostingClassifier._normalize_labels(true_labels)
+        z = np.asarray(logits, dtype=float).ravel()
+        prob = MyBinaryTreeGradientBoostingClassifier._stable_sigmoid(z)
+        return prob - y
 
-        # numerically stable sigmoid
-        def stable_sigmoid(t):
-            out = np.empty_like(t, dtype=float)
-            pos = t >= 0
-            neg = ~pos
-            out[pos] = 1.0 / (1.0 + np.exp(-t[pos]))
-            ez = np.exp(t[neg])
-            out[neg] = ez / (1.0 + ez)
-            return out
-
-        uniq = np.unique(y)
-        if np.array_equal(uniq, np.array([0, 1])) or np.array_equal(uniq, np.array([0.0, 1.0])) or (
-                uniq.size == 1 and (uniq[0] == 0 or uniq[0] == 1)
-        ):
-            # grad of mean NLL: sigmoid(z) - y
-            prob = stable_sigmoid(z)
-            gradient = prob - y
-        elif np.array_equal(uniq, np.array([-1, 1])) or (
-                uniq.size == 1 and (uniq[0] == -1 or uniq[0] == 1)
-        ):
-            # grad of mean NLL: -y * sigmoid(-y*z)
-            yz = -y * z
-            gradient = -y * stable_sigmoid(yz)
-        else:
-            prob = stable_sigmoid(z)
-            gradient = prob - y
-        return gradient
 
     def fit(
             self,
@@ -201,3 +156,23 @@ class MyBinaryTreeGradientBoostingClassifier:
         probas = self.predict_proba(X)
         predictions = (probas[:, 1] >= 0.5).astype(int)
         return predictions
+
+    @staticmethod
+    def _stable_sigmoid(x: np.ndarray) -> np.ndarray:
+        """Numerically stable sigmoid."""
+        out = np.empty_like(x, dtype=float)
+        pos = x >= 0
+        neg = ~pos
+        out[pos] = 1.0 / (1.0 + np.exp(-x[pos]))
+        exp_x = np.exp(x[neg])
+        out[neg] = exp_x / (1.0 + exp_x)
+        return out
+
+    @staticmethod
+    def _normalize_labels(y: np.ndarray) -> np.ndarray:
+        """Convert labels to {0,1} if they are {-1,1}."""
+        y = y.astype(float).ravel()
+        uniq = np.unique(y)
+        if np.array_equal(uniq, np.array([-1.0, 1.0])):
+            y = (y + 1.0) / 2.0  # map -1->0, 1->1
+        return y
