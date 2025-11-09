@@ -1,11 +1,3 @@
-import contextlib
-import inspect
-import json
-import os
-import pathlib
-import typing as tp
-import uuid
-
 import numpy as np
 import pandas as pd
 import sklearn
@@ -67,7 +59,8 @@ class MyBinaryTreeGradientBoostingClassifier:
         y_pred = np.clip(probas, MyBinaryTreeGradientBoostingClassifier.eps,
                          1 - MyBinaryTreeGradientBoostingClassifier.eps)
 
-        return -np.sum(true_labels * np.log(y_pred) + (1 - true_labels) * np.log(1 - y_pred))
+        cross_entropy = true_labels * np.log(y_pred) + (1 - true_labels) * np.log(1 - y_pred)
+        return -np.sum(cross_entropy)
 
     @staticmethod
     def cross_entropy_loss_gradient(
@@ -83,8 +76,7 @@ class MyBinaryTreeGradientBoostingClassifier:
         :return:
         """
         y_pred = 1 / (1 + np.exp(-logits))
-        gradient = y_pred - true_labels
-        return gradient
+        return y_pred - true_labels
 
     def fit(
             self,
@@ -131,12 +123,11 @@ class MyBinaryTreeGradientBoostingClassifier:
         :param X: [n_samples]
         :return:
         """
-        logits = self.initial_logits
-        # sequentially adjust logits with learning rate
+        result = self.initial_logits
         for estimator in self.estimators:
-            logits += self.learning_rate * estimator.predict(X)
+            result += self.learning_rate * estimator.predict(X)
 
-        return 1 / (1 + np.exp(logits))
+        return 1 / (1 + np.exp(result))
 
     def predict(
             self,
@@ -148,5 +139,4 @@ class MyBinaryTreeGradientBoostingClassifier:
         :return:
         """
         probas = self.predict_proba(X)
-        predictions = (probas[:, 1] > 0.5).astype(int)
-        return predictions
+        return (probas[:, 1] > 0.5).astype(int)
