@@ -298,41 +298,56 @@ class MyBinaryTreeGradientBoostingClassifier:
         self.loss_history = []  # this is to track model learning process
 
     def create_new_estimator(self, seed):
-        ...
-        return estimator
+        return self.base_estimator(**self.base_estimator_kwargs, random_state=seed)
 
     @staticmethod
     def cross_entropy_loss(
             true_labels: np.ndarray,
             logits: np.ndarray
-    ):
+    ) -> float:
         """
-        compute negative log-likelihood for logits,
-        use clipping for logarithms with self.eps
-        or use numerically stable special functions.
-        This is used to track model learning process
-        :param true_labels: [n_samples]
-        :param logits: [n_samples]
-        :return:
+         Numerically stable binary cross-entropy (negative log-likelihood) for logits.
+        Supports targets in {0,1} or {-1,1}. Returns mean loss.
+        {0,1}: L_i = log(1 + exp(z_i)) - y_i * z_i
+        {-1,1}: L_i = log(1 + exp(-y_i * z_i))
         """
-        ...
-        return nll
+        z = np.asarray(logits, dtype=float).ravel()
+        y = np.asarray(true_labels).ravel()
+        uniq = np.unique(y)
+        if np.array_equal(uniq, np.array([-1, 1])) or np.array_equal(uniq, np.array([-1.0, 1.0])):
+            # y in {-1,1}
+            loss_vec = np.logaddexp(0.0, -y * z)
+        else:
+            # convert anything else to {0,1}
+            if uniq.min() < 0:
+                y = (y + 1.0) / 2.0
+            loss_vec = np.logaddexp(0.0, z) - y * z
+        return float(loss_vec.mean())
 
     @staticmethod
     def cross_entropy_loss_gradient(
             true_labels: np.ndarray,
             logits: np.ndarray
-    ):
+    ) -> np.ndarray:
         """
-        compute gradient of log-likelihood w.r.t logits,
-        use clipping for logarithms with self.eps
-        or use numerically stable special functions
-        :param true_labels: [n_samples]
-        :param logits: [n_samples]
-        :return:
+        Gradient of mean negative log-likelihood w.r.t logits.
+        {0,1}: grad_i = sigmoid(z_i) - y_i
+        {-1,1}: grad_i = -y_i * sigmoid(-y_i * z_i)
         """
-        ...
-        return gradient
+        z = np.asarray(logits, dtype=float).ravel()
+        y = np.asarray(true_labels).ravel()
+        uniq = np.unique(y)
+        if np.array_equal(uniq, np.array([-1, 1])) or np.array_equal(uniq, np.array([-1.0, 1.0])):
+            # y in {-1,1}
+            yz = -y * z
+            prob = MyBinaryTreeGradientBoostingClassifier._stable_sigmoid(yz)
+            grad = -y * prob
+        else:
+            if uniq.min() < 0:
+                y = (y + 1.0) / 2.0
+            prob = MyBinaryTreeGradientBoostingClassifier._stable_sigmoid(z)
+            grad = prob - y
+        return grad
 
     def fit(
             self,
@@ -349,9 +364,10 @@ class MyBinaryTreeGradientBoostingClassifier:
         # only should be fitted on datasets with binary target
         assert (np.unique(y) == np.arange(2)).all()
         # init predictions with mean target (mind that these are logits!)
-        self.initial_logits = ...
+        p0 = np.clip(y.mean(), self.eps, 1 - self.eps)
+        self.initial_logits = float(np.log(p0 / (1.0 - p0)))
         # create starting logits
-        logits = ...
+        logits = np.full(X.shape[0], self.initial_logits, dtype=float)
         # init loss history with starting negative log-likelihood
         self.loss_history.append(self.cross_entropy_loss(y, logits))
         # sequentially fit estimators with random seeds
@@ -361,13 +377,15 @@ class MyBinaryTreeGradientBoostingClassifier:
                 replace=False
         ):
             # add newly created estimator
-            self.estimators.append(self.create_new_estimator(seed))
+            est = self.create_new_estimator(seed)
+            self.estimators.append(est)
             # compute gradient
-            gradient = ...
-            # fit estimator on gradient residual
-            ...
+            gradient = self.cross_entropy_loss_gradient(y, logits)
+            # fit estimator on gradient residual (negative gradient)
+            residual = -gradient  # y - sigmoid(logits)
+            est.fit(X, residual)
             # adjust logits with learning rate
-            ...
+            logits = logits + self.learning_rate * est.predict(X)
             # append new loss to history
             self.loss_history.append(self.cross_entropy_loss(y, logits))
         return self
@@ -377,28 +395,43 @@ class MyBinaryTreeGradientBoostingClassifier:
             X: np.ndarray
     ):
         """
-        :param X: [n_samples]
-        :return:
+        Return positive class probabilities as 1D array [n_samples].
         """
-        # init logits using precalculated values
-        logits = ...
-        # sequentially adjust logits with learning rate
+        logits = np.full(X.shape[0], self.initial_logits if self.initial_logits is not None else 0.0, dtype=float)
         for estimator in self.estimators:
-            ...
-        # don't forget to convert logits to probabilities
-        return probas
+            logits += self.learning_rate * estimator.predict(X)
+        p1 = 1.0 / (1.0 + np.exp(-logits))
+        return p1  # shape (n_samples,)
 
     def predict(
             self,
             X: np.ndarray
     ):
         """
-        calculate predictions using predict_proba
-        :param X: [n_samples]
-        :return:
+        Predict class labels (0/1) using 0.5 threshold on positive class probability.
         """
-        ...
-        return predictions
+        p1 = self.predict_proba(X)
+        return (p1 >= 0.5).astype(int)
+
+    @staticmethod
+    def _stable_sigmoid(x: np.ndarray) -> np.ndarray:
+        """Numerically stable sigmoid."""
+        out = np.empty_like(x, dtype=float)
+        pos = x >= 0
+        neg = ~pos
+        out[pos] = 1.0 / (1.0 + np.exp(-x[pos]))
+        exp_x = np.exp(x[neg])
+        out[neg] = exp_x / (1.0 + exp_x)
+        return out
+
+    @staticmethod
+    def _normalize_labels(y: np.ndarray) -> np.ndarray:
+        """Convert labels to {0,1} if they are {-1,1}."""
+        y = y.astype(float).ravel()
+        uniq = np.unique(y)
+        if np.array_equal(uniq, np.array([-1.0, 1.0])):
+            y = (y + 1.0) / 2.0  # map -1->0, 1->1
+        return y
 
 
 class Logger:
