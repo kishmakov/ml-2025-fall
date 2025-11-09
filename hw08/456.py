@@ -128,8 +128,7 @@ class MyBinaryTreeGradientBoostingClassifier:
         for estimator in self.estimators:
             logits += self.learning_rate * estimator.predict(X)
         p1 = 1 / (1 + np.exp(-logits))
-        p0 = 1 - p1
-        return np.column_stack([p0, p1])
+        return p1  # shape (n_samples,)
 
     def predict(
             self,
@@ -140,5 +139,5 @@ class MyBinaryTreeGradientBoostingClassifier:
         :param X: [n_samples]
         :return:
         """
-        probas = self.predict_proba(X)
-        return (probas[:, 1] > 0.5).astype(int)
+        p1 = self.predict_proba(X)
+        return (p1 >= 0.5).astype(int)
