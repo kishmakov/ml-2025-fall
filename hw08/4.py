@@ -67,9 +67,24 @@ class MyBinaryTreeGradientBoostingClassifier:
         :param logits: [n_samples]
         :return:
         """
-        # nll = log(1 + exp(z)) - y*z
-        nll = np.mean(np.logaddexp(0.0, logits) - true_labels * logits)
-        return nll
+        y = np.asarray(true_labels).reshape(-1)
+        z = np.asarray(logits).reshape(-1)
+        # detect label encoding
+        uniq = np.unique(y)
+        if np.array_equal(uniq, np.array([0, 1])) or np.array_equal(uniq, np.array([0.0, 1.0])) or (
+                uniq.size == 1 and (uniq[0] == 0 or uniq[0] == 1)
+        ):
+            # loss = softplus(z) - y*z
+            loss_vec = np.logaddexp(0.0, z) - y * z
+        elif np.array_equal(uniq, np.array([-1, 1])) or (
+                uniq.size == 1 and (uniq[0] == -1 or uniq[0] == 1)
+        ):
+            # loss = softplus(-y*z)
+            loss_vec = np.logaddexp(0.0, -y * z)
+        else:
+            # fallback: treat as {0,1}
+            loss_vec = np.logaddexp(0.0, z) - y * z
+        return float(np.mean(loss_vec))
 
     @staticmethod
     def cross_entropy_loss_gradient(
@@ -82,11 +97,37 @@ class MyBinaryTreeGradientBoostingClassifier:
         or use numerically stable special functions
         :param true_labels: [n_samples]
         :param logits: [n_samples]
-        :return:
+        :return: [n_samples] gradient
         """
-        # grad of nll: sigmoid(z) - y
-        prob = 1.0 / (1.0 + np.exp(-logits))
-        gradient = prob - true_labels
+        y = np.asarray(true_labels).reshape(-1)
+        z = np.asarray(logits).reshape(-1)
+
+        # numerically stable sigmoid
+        def stable_sigmoid(t):
+            out = np.empty_like(t, dtype=float)
+            pos = t >= 0
+            neg = ~pos
+            out[pos] = 1.0 / (1.0 + np.exp(-t[pos]))
+            ez = np.exp(t[neg])
+            out[neg] = ez / (1.0 + ez)
+            return out
+
+        uniq = np.unique(y)
+        if np.array_equal(uniq, np.array([0, 1])) or np.array_equal(uniq, np.array([0.0, 1.0])) or (
+                uniq.size == 1 and (uniq[0] == 0 or uniq[0] == 1)
+        ):
+            # grad of mean NLL: sigmoid(z) - y
+            prob = stable_sigmoid(z)
+            gradient = prob - y
+        elif np.array_equal(uniq, np.array([-1, 1])) or (
+                uniq.size == 1 and (uniq[0] == -1 or uniq[0] == 1)
+        ):
+            # grad of mean NLL: -y * sigmoid(-y*z)
+            yz = -y * z
+            gradient = -y * stable_sigmoid(yz)
+        else:
+            prob = stable_sigmoid(z)
+            gradient = prob - y
         return gradient
 
     def fit(
@@ -160,217 +201,3 @@ class MyBinaryTreeGradientBoostingClassifier:
         probas = self.predict_proba(X)
         predictions = (probas[:, 1] >= 0.5).astype(int)
         return predictions
-
-
-class Logger:
-    """Logger performs data management and stores scores and other relevant information"""
-
-    def __init__(self, logs_path: tp.Union[str, os.PathLike]):
-        self.path = pathlib.Path(logs_path)
-
-        records = []
-        for root, dirs, files in os.walk(self.path):
-            for file in files:
-                if file.lower().endswith('.json'):
-                    uuid = os.path.splitext(file)[0]
-                    with open(os.path.join(root, file), 'r') as f:
-                        try:
-                            logged_data = json.load(f)
-                            records.append(
-                                {
-                                    'id': uuid,
-                                    **logged_data
-                                }
-                            )
-                        except json.JSONDecodeError:
-                            pass
-        if records:
-            self.leaderboard = pd.DataFrame.from_records(records, index='id')
-        else:
-            self.leaderboard = pd.DataFrame(index=pd.Index([], name='id'))
-
-        self._current_run = None
-
-    class Run:
-        """Run incapsulates information for a particular entry of logged material. Each run is solitary experiment"""
-
-        def __init__(self, name, storage, path):
-            self.name = name
-            self._storage = storage
-            self._path = path
-            self._storage.append(pd.Series(name=name))
-
-        def log(self, key, value):
-            self._storage.loc[self.name, key] = value
-
-        def log_values(self, log_values: tp.Dict[str, tp.Any]):
-            for key, value in log_values.items():
-                self.log(key, value)
-
-        def save_logs(self):
-            with open(self._path / f'{self.name}.json', 'w+') as f:
-                json.dump(self._storage.loc[self.name].to_dict(), f)
-
-        def log_artifact(self, fname: str, writer: tp.Callable):
-            with open(self._path / fname, 'wb+') as f:
-                writer(f)
-
-    @contextlib.contextmanager
-    def run(self, name: tp.Optional[str] = None):
-        if name is None:
-            name = str(uuid.uuid4())
-        # elif name in self.leaderboard.index:
-        #     raise NameError("Run with given name already exists, name should be unique")
-        else:
-            name = name.replace(' ', '_')
-        self._current_run = Logger.Run(name, self.leaderboard, self.path / name)
-        os.makedirs(self.path / name, exist_ok=True)
-        try:
-            yield self._current_run
-        finally:
-            self._current_run.save_logs()
-
-
-def load_predictions_dataframe(filename, column_prefix, index):
-    with open(filename, 'rb') as file:
-        data = np.load(file)
-        dataframe = pd.DataFrame(data, columns=[f'{column_prefix}_{i}' for i in range(data.shape[1])],
-                                 index=index)
-        return dataframe
-
-
-class ExperimentHandler:
-    """This class perfoms experiments with given model, measures metrics and logs everything for thorough comparison"""
-    stacking_prediction_filename = 'cv_stacking_prediction.npy'
-    test_stacking_prediction_filename = 'test_stacking_prediction.npy'
-
-    def __init__(
-            self,
-            X_train: pd.DataFrame,
-            y_train: pd.Series,
-            X_test: pd.DataFrame,
-            y_test: pd.Series,
-            cv_iterable: tp.Iterable,
-            logger: Logger,
-            metrics: tp.Dict[str, tp.Union[tp.Callable, str]],
-            n_jobs=-1
-    ):
-        self.X_train = X_train
-        self.y_train = y_train
-        self.X_test = X_test
-        self.y_test = y_test
-        self._cv_iterable = cv_iterable
-        self.logger = logger
-        self._metrics = metrics
-        self._n_jobs = n_jobs
-
-    def score_test(self, estimator, metrics, run, test_data=None):
-        """
-        Computes scores for test data and logs them to given run
-        :param estimator: fitted estimator
-        :param metrics: metrics to compute
-        :param run: run to log into
-        :param test_data: optional argument if one wants to pass augmented test dataset
-        :return: None
-        """
-        if test_data is None:
-            test_data = self.X_test
-        test_scores = _score(estimator, test_data, self.y_test, metrics)
-        run.log_values({key + '_test': value for key, value in test_scores.items()})
-
-    def score_cv(self, estimator, metrics, run):
-        """
-        computes scores on cross-validation
-        :param estimator: estimator to fit
-        :param metrics: metrics to compute
-        :param run: run to log to
-        :return: None
-        """
-        cross_val_results = sklearn.model_selection.cross_validate(
-            estimator,
-            self.X_train,
-            self.y_train,
-            cv=self._cv_iterable,
-            n_jobs=self._n_jobs,
-            scoring=metrics
-        )
-        for key, value in cross_val_results.items():
-            if key.startswith('test_'):
-                metric_name = key.split('_', maxsplit=1)[1]
-                mean_score = np.mean(value)
-                std_score = np.std(value)
-                run.log_values(
-                    {
-                        metric_name + '_mean': mean_score,
-                        metric_name + '_std': std_score
-                    }
-                )
-
-    def generate_stacking_predictions(self, estimator, run):
-        """
-        generates predictions over cross-validation folds, then saves them as artifacts
-        returns fitted estimator for convinience and les train overhead
-        :param estimator: estimator to use
-        :param run: run to log to
-        :return: estimator fitted on train, stacking cross-val predictions, stacking test predictions
-        """
-        if hasattr(estimator, "predict_proba"):
-            method = "predict_proba"
-        elif hasattr(estimator, "decision_function"):
-            method = "decision_function"
-        else:
-            method = "predict"
-        cross_val_stacking_prediction = sklearn.model_selection.cross_val_predict(
-            estimator,
-            self.X_train,
-            self.y_train,
-            cv=self._cv_iterable,
-            n_jobs=self._n_jobs,
-            method=method
-        )
-        run.log_artifact(ExperimentHandler.stacking_prediction_filename,
-                         lambda file: np.save(file, cross_val_stacking_prediction))
-        estimator.fit(self.X_train, self.y_train)
-        test_stacking_prediction = getattr(estimator, method)(self.X_test)
-        run.log_artifact(ExperimentHandler.test_stacking_prediction_filename,
-                         lambda file: np.save(file, test_stacking_prediction))
-        return estimator, cross_val_stacking_prediction, test_stacking_prediction
-
-    def get_metrics(self, estimator):
-        """
-        get callable metrics with estimator validation
-        (e.g. estimator has predict_proba necessary for likelihood computation, etc)
-        """
-        return _check_multimetric_scoring(estimator, self._metrics)
-
-    def run(self, estimator: sklearn.base.BaseEstimator, name=None):
-        """
-        perform run for given estimator
-        :param estimator: estimator to use
-        :param name: name of run for convinience and consitent logging
-        :return: leaderboard with conducted run
-        """
-        metrics = self.get_metrics(estimator)
-        with self.logger.run(name=name) as run:
-            # compute predictions over cross-validation
-            self.score_cv(estimator, metrics, run)
-            fitted_on_train, _, _ = self.generate_stacking_predictions(estimator, run)
-            self.score_test(fitted_on_train, metrics, run, test_data=self.X_test)
-            return self.logger.leaderboard.loc[[run.name]]
-
-    def get_stacking_predictions(self, run_names):
-        """
-        :param run_names: run names for which to extract stacking predictions for averaging and stacking
-        :return: dataframe with predictions indexed by run names
-        """
-        train_dataframes = []
-        test_dataframes = []
-        for run_name in run_names:
-            train_filename = self.logger.path / run_name / ExperimentHandler.stacking_prediction_filename
-            train_dataframes.append(load_predictions_dataframe(filename=train_filename, column_prefix=run_name,
-                                                               index=self.X_train.index))
-            test_filename = self.logger.path / run_name / ExperimentHandler.test_stacking_prediction_filename
-            test_dataframes.append(load_predictions_dataframe(filename=test_filename, column_prefix=run_name,
-                                                              index=self.X_test.index))
-
-        return pd.concat(train_dataframes, axis=1), pd.concat(test_dataframes, axis=1)
