@@ -46,19 +46,7 @@ class MyBinaryTreeGradientBoostingClassifier:
         self.loss_history = []  # this is to track model learning process
 
     def create_new_estimator(self, seed):
-        params = self.base_estimator_kwargs.copy()
-        signature = inspect.signature(self.base_estimator.__init__)
-        seed_keyword = None
-        if 'seed' in signature.parameters:
-            seed_keyword = 'seed'
-        elif 'random_state' in signature.parameters:
-            seed_keyword = 'random_state'
-
-        if seed_keyword:
-            params[seed_keyword] = seed
-
-        estimator = self.base_estimator(**params)
-        return estimator
+        return self.base_estimator(**self.base_estimator_kwargs, random_state=seed)
 
     @staticmethod
     def cross_entropy_loss(
@@ -76,10 +64,10 @@ class MyBinaryTreeGradientBoostingClassifier:
         """
 
         probas = 1 / (1 + np.exp(-logits))
-        y_pred = np.clip(probas, MyBinaryTreeGradientBoostingClassifier.eps, 1 - MyBinaryTreeGradientBoostingClassifier.eps)
+        y_pred = np.clip(probas, MyBinaryTreeGradientBoostingClassifier.eps,
+                         1 - MyBinaryTreeGradientBoostingClassifier.eps)
 
-        nll = -np.sum(true_labels * np.log(y_pred) + (1-true_labels)*np.log(1-y_pred))
-        return nll
+        return -np.sum(true_labels * np.log(y_pred) + (1 - true_labels) * np.log(1 - y_pred))
 
     @staticmethod
     def cross_entropy_loss_gradient(
@@ -95,7 +83,6 @@ class MyBinaryTreeGradientBoostingClassifier:
         :return:
         """
         y_pred = 1 / (1 + np.exp(-logits))
-        #gradient = y_pred - true_labels
         gradient = y_pred - true_labels
         return gradient
 
@@ -112,7 +99,7 @@ class MyBinaryTreeGradientBoostingClassifier:
         """
         self.loss_history = []
         assert (np.unique(y) == np.arange(2)).all()
-        # init predictions with mean target (mind that these are logits!)
+        # init predictions with mean target
         self.initial_logits = np.log(np.sum(y) / (y.shape[0] - np.sum(y)))
         # create starting logits
         logits = self.initial_logits
@@ -125,7 +112,6 @@ class MyBinaryTreeGradientBoostingClassifier:
                 replace=False
         ):
             estimator = self.create_new_estimator(seed)
-            # add newly created estimator
             self.estimators.append(estimator)
             # compute gradient
             gradient = self.cross_entropy_loss_gradient(true_labels=y, logits=logits)
@@ -133,8 +119,8 @@ class MyBinaryTreeGradientBoostingClassifier:
             estimator.fit(X=X, y=gradient)
             # adjust logits with learning rate
             logits -= self.learning_rate * gradient
-            # append new loss to history
             self.loss_history.append(self.cross_entropy_loss(y, logits))
+
         return self
 
     def predict_proba(
@@ -145,12 +131,12 @@ class MyBinaryTreeGradientBoostingClassifier:
         :param X: [n_samples]
         :return:
         """
-        # init logits using precalculated values
         logits = self.initial_logits
         # sequentially adjust logits with learning rate
         for estimator in self.estimators:
             logits += self.learning_rate * estimator.predict(X)
-        return 1 / (1+ np.exp(logits))
+
+        return 1 / (1 + np.exp(logits))
 
     def predict(
             self,
@@ -162,6 +148,5 @@ class MyBinaryTreeGradientBoostingClassifier:
         :return:
         """
         probas = self.predict_proba(X)
-        predictions = (probas[:,1] > 0.5).astype(int)
+        predictions = (probas[:, 1] > 0.5).astype(int)
         return predictions
-
