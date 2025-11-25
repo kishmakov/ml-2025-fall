@@ -1,0 +1,46 @@
+digraph TwoLayerNN {
+    rankdir=LR;
+    splines=true;
+    nodesep=0.7;
+    ranksep=1.0;
+
+    node [shape=circle, style=filled, fontsize=12];
+
+    // Input layer (x ∈ R^d)
+    subgraph cluster_input {
+        label = "Input layer (x ∈ ℝᵈ)";
+        color = "white";
+        x1 [label="x_1", fillcolor="#d0e1ff"];
+        xinvis [label="...", fontsize=18];
+        xd [label="x_d", fillcolor="#d0e1ff"];
+        b1 [label="b1", fillcolor="#d0e100"];
+    }
+
+    // Second layer
+    subgraph cluster_hidden {
+        label = "Second layer by σ_1 (z ∈ ℝʰ)";
+        color = "white";
+        z1 [label="z_1", fillcolor="#ffe6cc"];
+        zinvis [label="...", fontsize=18];
+        zh [label="z_h", fillcolor="#ffe6cc"];
+        b2 [label="b2", fillcolor="#d0e100"];
+    }
+
+    subgraph cluster_output {
+        label = "Output by σ_2";
+        color = "white";
+        y [label="y", fillcolor="#d5ffd5"];
+    }
+
+    // Connections: input → second
+    x1 -> z1; x1 -> zinvis; x1 -> zh;
+    xinvis -> z1; xinvis -> zinvis; xinvis -> zh;
+    xd -> z1; xd -> zinvis; xd -> zh;
+    b1 -> z1; b1 -> zinvis; b1 -> zh;
+
+    // Hidden → output
+    z1 -> y;
+    zinvis -> y;
+    zh -> y;
+    b2 -> y;
+}
